@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 
 const MAX_FILES = 8;
@@ -9,23 +9,38 @@ const fileOk = (f: File) =>
 
 const schema = z.object({
   prompt: z.string().min(1, "请输入提示词").max(1000),
-  key: z.string().optional(), // 仅当你用“可公开 publishable key”时可置空
+  key: z.string().optional(),
 });
 
 type Img = { name: string; url: string };
+type Run = { id: string; ts: string; durSec: number; url: string };
 
 export default function Page() {
   const [prompt, setPrompt] = useState("");
   const [key, setKey] = useState<string>();
-  // () => sessionStorage.getItem("nb:key") || ""
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("就绪");
   const [imgs, setImgs] = useState<Img[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<{ open: boolean; idx: number }>({
     open: false,
     idx: 0,
   });
+  const [progress, setProgress] = useState(0);
+
+  // ---- 伪进度逻辑 ----
+  useEffect(() => {
+    if (!busy) return setProgress(0);
+    let pct = 0;
+    const step = 100 / (14 * 10); // 每100ms一次，14秒到99%
+    const timer = setInterval(() => {
+      pct += step;
+      setProgress((p) => Math.min(pct, 99));
+    }, 100);
+    return () => clearInterval(timer);
+  }, [busy]);
+
   function openPreview(idx: number) {
     setPreview({ open: true, idx });
   }
@@ -45,7 +60,6 @@ export default function Page() {
   }
 
   function downloadImage(url: string, filename = "image") {
-    // data:/blob: 直接下载
     if (url.startsWith("data:") || url.startsWith("blob:")) {
       const a = document.createElement("a");
       a.href = url;
@@ -55,7 +69,6 @@ export default function Page() {
       a.remove();
       return;
     }
-    // 其它走同源中转，避免 CORS
     const a = document.createElement("a");
     a.href = `/api/download?url=${encodeURIComponent(
       url
@@ -94,11 +107,9 @@ export default function Page() {
   function extractImageUrlsFromText(t: string): string[] {
     if (!t) return [];
     const out: string[] = [];
-    // Markdown: ![alt](url)
     const md = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/gi;
     let m: RegExpExecArray | null;
     while ((m = md.exec(t))) out.push(m[1]);
-    // 裸链接
     const re = /(https?:\/\/[^\s\)\]\}<'">,，。；、]+)/gi;
     let m2: RegExpExecArray | null;
     while ((m2 = re.exec(t))) out.push(m2[1].replace(/[>,，。；、]+$/, ""));
@@ -112,7 +123,7 @@ export default function Page() {
     const added: Img[] = [];
     for (const f of arr) {
       const b64 = await fileToDataURL(f);
-      const down = await downscaleDataURL(b64, 2048, 0.82); // 新增：压到最长边≤2048
+      const down = await downscaleDataURL(b64, 2048, 0.82);
       added.push({ name: f.name, url: down });
     }
     setImgs((s) => [...s, ...added]);
@@ -122,21 +133,10 @@ export default function Page() {
     setImgs((s) => s.filter((_, idx) => idx !== i));
   }
 
-  function saveKey() {
-    sessionStorage.setItem("nb:key", key.trim());
-    toast("Key 已保存到本会话");
-  }
-  function clearKey() {
-    sessionStorage.removeItem("nb:key");
-    setKey("");
-    toast("已清除 Key");
-  }
-
   async function generate() {
     const t0 = performance.now();
     const check = schema.safeParse({ prompt, key: key?.trim() });
     if (!check.success) return toast(check.error.issues[0].message);
-
     const _key = key?.trim() || process.env.NEXT_PUBLIC_PUBLISHABLE_KEY || "";
     if (!_key) return toast("缺少 Key");
 
@@ -145,11 +145,7 @@ export default function Page() {
 
     try {
       const endpoint = "https://oaiapi.asia/v1/chat/completions";
-
-      // 按标准 messages[].content[] 组织
-      const content: any[] = [
-        { type: "text", text: ensureImageReturn(prompt) },
-      ];
+      const content: any[] = [{ type: "text", text: ensureImageReturn(prompt) }];
       for (const im of imgs)
         content.push({ type: "image_url", image_url: { url: im.url } });
 
@@ -168,19 +164,31 @@ export default function Page() {
       });
 
       const txt = await res.text();
+      
+      // 直接从原始响应文本中提取URL
+      const directUrls = extractImageUrlsFromText(txt);
+      if (directUrls.length > 0) {
+        const dur = (performance.now() - t0) / 1000;
+        openNewRun(directUrls.map(safeUrl), dur);
+        toast(`完成：${directUrls.length} 张`);
+        setProgress(100);
+        setTimeout(() => setBusy(false), 300);
+        return;
+      }
+      
       const json = safeJson(txt);
       if (!res.ok) {
-        const msg = (json?.error?.message || `HTTP ${res.status}`).slice(
-          0,
-          200
-        );
+        const msg = (json?.error?.message || `HTTP ${res.status}`).slice(0, 200);
         throw new Error(msg);
       }
+      
+      // 调试日志，帮助排查问题
+      console.log("API响应:", JSON.stringify(json, null, 2));
 
-      // 解析优先级：message.content[].image_url → data:image → 纯文本URL
       const msg = json?.choices?.[0]?.message;
       let urls: string[] = [];
 
+      // 处理标准OpenAI格式响应
       if (Array.isArray(msg?.content)) {
         for (const b of msg.content) {
           if (b?.type === "image_url" && b.image_url?.url)
@@ -189,13 +197,29 @@ export default function Page() {
             urls.push(...extractImageUrlsFromText(b.text).map(safeUrl));
             urls.push(...extractDataUris(b.text));
           }
-          if (typeof b === "string") {
-            urls.push(...extractImageUrlsFromText(b).map(safeUrl));
-            urls.push(...extractDataUris(b));
+        }
+      }
+
+      // 处理直接在choices字段中返回URL的情况
+      if (!urls.length && json?.choices && typeof json.choices === 'string') {
+        urls.push(...extractImageUrlsFromText(json.choices).map(safeUrl));
+      }
+
+      // 处理choices数组中直接包含URL字符串的情况
+      if (!urls.length && Array.isArray(json?.choices)) {
+        for (const choice of json.choices) {
+          if (typeof choice === 'string') {
+            urls.push(...extractImageUrlsFromText(choice).map(safeUrl));
           }
         }
       }
 
+      // 处理整个JSON字符串，以防URL嵌套在其他位置
+      if (!urls.length) {
+        urls.push(...extractImageUrlsFromText(JSON.stringify(json)).map(safeUrl));
+      }
+
+      // 处理images数组格式
       if (!urls.length && Array.isArray(json?.images)) {
         urls = json.images
           .map((im: any) => im?.image_url?.url || "")
@@ -203,70 +227,10 @@ export default function Page() {
           .map(safeUrl);
       }
 
-      if (!urls.length) {
-        const raw = String(msg?.content || "");
-        urls = extractDataUris(raw);
-        if (!urls.length) urls = extractImageUrlsFromText(raw).map(safeUrl);
-      }
-
       urls = Array.from(new Set(urls)).filter(Boolean);
       if (!urls.length) {
-        // ⬇️ 自动重试一次，强约束输出
-        const retryContent = [
-          {
-            type: "text",
-            text:
-              ensureImageReturn(prompt) +
-              " 只返回图片，不要文字；如无法生成，请返回原因。",
-          },
-          ...imgs.map((im) => ({
-            type: "image_url",
-            image_url: { url: im.url },
-          })),
-        ];
-        const retryBody = {
-          model: "gemini-2.5-flash-image",
-          messages: [{ role: "user", content: retryContent }],
-        };
-        const r2 = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${_key}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(retryBody),
-        });
-        const t2 = await r2.text();
-        const j2 = safeJson(t2);
-        const m2 = j2?.choices?.[0]?.message;
-
-        // 再试解析
-        if (Array.isArray(m2?.content)) {
-          for (const b of m2.content) {
-            if (b?.type === "image_url" && b.image_url?.url)
-              urls.push(safeUrl(b.image_url.url));
-            if (b?.type === "text") {
-              urls.push(...extractDataUris(b.text));
-              urls.push(...extractImageUrlsFromText(b.text).map(safeUrl));
-            }
-          }
-        } else {
-          const raw = String(m2?.content || "");
-          urls.push(...extractDataUris(raw));
-          urls.push(...extractImageUrlsFromText(raw).map(safeUrl));
-        }
-        urls = Array.from(new Set(urls)).filter(Boolean);
-
-        if (!urls.length) {
-          // 仍无图，给出原因提示
-          const reason =
-            typeof m2?.content === "string" && m2.content
-              ? m2.content.slice(0, 200)
-              : "未返回图片";
-          toast(reason);
-          setBusy(false);
-          return;
-        }
+        console.error("未能从响应中提取图片URL:", txt);
+        throw new Error("未返回图片");
       }
 
       const dur = (performance.now() - t0) / 1000;
@@ -275,28 +239,23 @@ export default function Page() {
     } catch (e: any) {
       toast(e?.message || "失败");
     } finally {
-      setBusy(false);
+      setProgress(100);
+      setTimeout(() => setBusy(false), 300);
     }
   }
-
-  // 简单结果区
-  type Run = { id: string; ts: string; durSec: number; url: string };
-  const [runs, setRuns] = useState<Run[]>([]);
 
   function openNewRun(urls: string[], durSec = 0) {
     const ts = new Date().toLocaleString();
     const url = urls[0];
     if (!url) return;
     const id = crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-    setRuns((s) => [{ id, ts, durSec, url }, ...s]); // 仍然置顶，但 key 稳定
+    setRuns((s) => [{ id, ts, durSec, url }, ...s]);
   }
 
   return (
     <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-bold">AI PNG · 最小版</h1>
-      <p className="text-sm text-gray-600 mt-1">
-        静态导出可用；Key 仅会话保存。
-      </p>
+      <h1 className="text-2xl font-bold">图片生成</h1>
+      <p className="text-sm text-gray-600 mt-1">2025</p>
 
       <section className="mt-6 space-y-4">
         <div>
@@ -315,9 +274,7 @@ export default function Page() {
           </label>
           <div
             className="rounded-md border-2 border-dashed p-6 text-center text-gray-600"
-            onDragOver={(e) => {
-              e.preventDefault();
-            }}
+            onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
               onFiles(e.dataTransfer.files);
@@ -358,36 +315,13 @@ export default function Page() {
           )}
         </div>
 
-        <div>
-          <label className="block text-sm text-gray-600 mb-1">
-            Key（会话内保存）
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              autoComplete="off"
-              inputMode="text"
-              className="flex-1 rounded-md border p-3"
-              placeholder="粘贴你的 key（或使用 NEXT_PUBLIC_PUBLISHABLE_KEY）"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-            />
-            <button className="rounded-md border px-3" onClick={saveKey}>
-              保存
-            </button>
-            <button className="rounded-md border px-3" onClick={clearKey}>
-              清除
-            </button>
-          </div>
-        </div>
-
         <div className="flex items-center gap-3">
           <button
             className="rounded-md bg-black text-white px-4 py-2 disabled:opacity-50"
             disabled={busy}
             onClick={generate}
           >
-            {busy ? "处理中…" : "生成图片"}
+            {busy ? `处理中 ${Math.floor(progress)}%` : "生成图片"}
           </button>
           <span className="text-sm text-gray-600">{status}</span>
         </div>
@@ -396,12 +330,15 @@ export default function Page() {
       {!!runs.length && (
         <section className="mt-8">
           <div className="mx-auto max-w-5xl grid [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] gap-6">
-            {runs.map((r) => (
+            {runs.map((r, i) => (
               <div key={r.id} className="rounded-xl border p-3">
-                {/* ... */}
+                <div className="text-sm text-gray-700">生成时间：{r.ts}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  用时：{r.durSec.toFixed(1)}s
+                </div>
                 <div
                   className="mt-3 relative rounded-lg border overflow-hidden cursor-zoom-in"
-                  onClick={() => openPreview(r.id)} // 若你用 id 控预览
+                  onClick={() => openPreview(i)}
                 >
                   <img
                     src={r.url}
@@ -428,32 +365,22 @@ export default function Page() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="bg-[#fff9ef] rounded-xl p-3">
-                  <img src={url} alt="" className="w-full h-auto rounded-md" />
+                  {url && <img src={url} alt="" className="w-full h-auto rounded-md" />}
                   <div className="mt-3 flex flex-wrap gap-2 justify-between items-center">
                     <div className="text-xs text-gray-700">
-                      第 {preview.idx + 1} / {runs.length}
+                      {runs.length > 0 ? `第 ${preview.idx + 1} / ${runs.length}` : ""}
                     </div>
                     <div className="flex gap-2">
-                      <button
-                        className="rounded border px-3 py-1"
-                        onClick={() =>
-                          downloadImage(url, `run-${preview.idx + 1}.png`)
-                        }
-                      >
-                        下载PNG
-                      </button>
-                      <button
-                        className="rounded border px-3 py-1"
-                        onClick={prevImg}
-                      >
-                        上一张
-                      </button>
-                      <button
-                        className="rounded border px-3 py-1"
-                        onClick={nextImg}
-                      >
-                        下一张
-                      </button>
+                      {url && (
+                        <button
+                          className="rounded border px-3 py-1"
+                          onClick={() =>
+                            downloadImage(url, `run-${preview.idx + 1}.png`)
+                          }
+                        >
+                          下载PNG
+                        </button>
+                      )}
                       <button
                         className="rounded border px-3 py-1"
                         onClick={closePreview}
