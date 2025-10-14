@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import { z } from "zod";
 
 const MAX_FILES = 8;
@@ -18,7 +17,8 @@ type Run = { id: string; ts: string; durSec: number; url: string };
 
 export default function Page() {
   const [prompt, setPrompt] = useState("");
-  const [key, setKey] = useState<string>("");
+  const [key, ] = useState<string>();
+  const [batchSize, setBatchSize] = useState(1);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("就绪");
   const [imgs, setImgs] = useState<Img[]>([]);
@@ -41,13 +41,13 @@ export default function Page() {
   useEffect(() => {
     if (!busy) return setProgress(0);
     let pct = 0;
-    const step = 100 / (14 * 10); // 每100ms一次，14秒到99%
+    const step = 100 / (14 * 10 * batchSize); // 每100ms一次，14秒到99%
     const timer = setInterval(() => {
       pct += step;
       setProgress(() => Math.min(pct, 99));
     }, 100);
     return () => clearInterval(timer);
-  }, [busy]);
+  }, [busy, batchSize]);
 
   function openPreview(idx: number) {
     setPreview({ open: true, idx });
@@ -137,108 +137,19 @@ export default function Page() {
   }
 
   async function generate() {
-    const t0 = performance.now();
     const check = schema.safeParse({ prompt, key: key?.trim() });
     if (!check.success) return toast(check.error.issues[0].message);
     const _key = key?.trim() || process.env.NEXT_PUBLIC_PUBLISHABLE_KEY || "";
     if (!_key) return toast("缺少 Key");
 
     setBusy(true);
-    setStatus("请求中…");
+    setStatus(`正在生成 ${batchSize} 张图片...`);
+
+    const promises = Array.from({ length: batchSize }, () => doGenerate(_key));
 
     try {
-      const endpoint = "https://oaiapi.asia/v1/chat/completions";
-      const content: ({ type: "text"; text: string; } | { type: "image_url"; image_url: { url: string; }; })[] = [{ type: "text", text: ensureImageReturn(prompt) }];
-      for (const im of imgs)
-        content.push({ type: "image_url", image_url: { url: im.url } });
-
-      const body = {
-        model: "gemini-2.5-flash-image",
-        messages: [{ role: "user", content }],
-      };
-
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${_key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      const txt = await res.text();
-      
-      // 直接从原始响应文本中提取URL
-      const directUrls = extractImageUrlsFromText(txt);
-      if (directUrls.length > 0) {
-        const dur = (performance.now() - t0) / 1000;
-        openNewRun(directUrls.map(safeUrl), dur);
-        toast(`完成：${directUrls.length} 张`);
-        setProgress(100);
-        setTimeout(() => setBusy(false), 300);
-        return;
-      }
-      
-      const json = safeJson(txt);
-      if (!res.ok) {
-        const msg = (json?.error?.message || `HTTP ${res.status}`).slice(0, 200);
-        throw new Error(msg);
-      }
-      
-      // 调试日志，帮助排查问题
-      console.log("API响应:", JSON.stringify(json, null, 2));
-
-      const msg = json?.choices?.[0]?.message;
-      let urls: string[] = [];
-
-      // 处理标准OpenAI格式响应
-      if (Array.isArray(msg?.content)) {
-        for (const b of msg.content) {
-          if (b?.type === "image_url" && b.image_url?.url)
-            urls.push(safeUrl(b.image_url.url));
-          if (b?.type === "text" && typeof b.text === "string") {
-            urls.push(...extractImageUrlsFromText(b.text).map(safeUrl));
-            urls.push(...extractDataUris(b.text));
-          }
-        }
-      }
-
-      // 处理直接在choices字段中返回URL的情况
-      if (!urls.length && json?.choices && typeof json.choices === 'string') {
-        urls.push(...extractImageUrlsFromText(json.choices).map(safeUrl));
-      }
-
-      // 处理choices数组中直接包含URL字符串的情况
-      if (!urls.length && Array.isArray(json?.choices)) {
-        for (const choice of json.choices) {
-          if (typeof choice === 'string') {
-            urls.push(...extractImageUrlsFromText(choice).map(safeUrl));
-          }
-        }
-      }
-
-      // 处理整个JSON字符串，以防URL嵌套在其他位置
-      if (!urls.length) {
-        urls.push(...extractImageUrlsFromText(JSON.stringify(json)).map(safeUrl));
-      }
-
-      // 处理images数组格式
-      if (!urls.length && Array.isArray(json?.images)) {
-        urls = json.images
-          .map((im: { image_url?: { url: string } }) => im?.image_url?.url || "")
-          .filter(Boolean)
-          .map(safeUrl);
-      }
-
-      urls = Array.from(new Set(urls)).filter(Boolean);
-      if (!urls.length) {
-        console.error("未能从响应中提取图片URL:", txt);
-        throw new Error("未返回图片");
-      }
-
-      const dur = (performance.now() - t0) / 1000;
-      openNewRun(urls, dur);
-      toast(`完成：${urls.length} 张`);
+      await Promise.all(promises);
+      toast(`完成：${batchSize} 张`);
     } catch (e: unknown) {
       toast((e as Error)?.message || "失败");
     } finally {
@@ -247,29 +158,116 @@ export default function Page() {
     }
   }
 
-  function openNewRun(urls: string[], durSec = 0) {
+  async function doGenerate(_key: string) {
+    const t0 = performance.now();
+    const res = await fetch("https://oaiapi.asia/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${_key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gemini-2.5-flash-image",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: ensureImageReturn(prompt) },
+              ...imgs.map((im) => ({ type: "image_url", image_url: { url: im.url } })),
+            ],
+          },
+        ],
+      }),
+    });
+
+    const txt = await res.text();
+    const directUrls = extractImageUrlsFromText(txt);
+    if (directUrls.length > 0) {
+      const dur = (performance.now() - t0) / 1000;
+      for (const url of directUrls) {
+        addRun(url, dur / directUrls.length);
+      }
+      return;
+    }
+
+    const json = safeJson(txt);
+    if (!res.ok) {
+      const msg = (json?.error?.message || `HTTP ${res.status}`).slice(0, 200);
+      throw new Error(msg);
+    }
+
+    const msg = json?.choices?.[0]?.message;
+    let urls: string[] = [];
+
+    if (Array.isArray(msg?.content)) {
+      for (const b of msg.content) {
+        if (b?.type === "image_url" && b.image_url?.url)
+          urls.push(safeUrl(b.image_url.url));
+        if (b?.type === "text" && typeof b.text === "string") {
+          urls.push(...extractImageUrlsFromText(b.text).map(safeUrl));
+          urls.push(...extractDataUris(b.text));
+        }
+      }
+    } else if (typeof msg?.content === 'string') {
+      urls.push(...extractImageUrlsFromText(msg.content).map(safeUrl));
+    }
+
+    if (!urls.length && json?.choices && typeof json.choices === 'string') {
+      urls.push(...extractImageUrlsFromText(json.choices).map(safeUrl));
+    }
+
+    if (!urls.length && Array.isArray(json?.choices)) {
+      for (const choice of json.choices) {
+        if (typeof choice === 'string') {
+          urls.push(...extractImageUrlsFromText(choice).map(safeUrl));
+        }
+      }
+    }
+
+    if (!urls.length) {
+      urls.push(...extractImageUrlsFromText(JSON.stringify(json)).map(safeUrl));
+    }
+
+    if (!urls.length && Array.isArray(json?.images)) {
+      urls = json.images
+        .map((im: { image_url?: { url?: string } }) => im?.image_url?.url || "")
+         .filter(Boolean)
+         .map(safeUrl);
+    }
+
+    const finalUrls = Array.from(new Set(urls)).filter(Boolean);
+    if (finalUrls.length === 0) {
+      throw new Error("未返回图片");
+    }
+
+    const dur = (performance.now() - t0) / 1000;
+    for (const url of finalUrls) {
+      addRun(url, dur / finalUrls.length);
+    }
+  }
+
+  function addRun(url: string, durSec = 0) {
     const ts = new Date().toLocaleString();
-    const url = urls[0];
-    if (!url) return;
     const id = crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     const newRun = { id, ts, durSec, url };
+
     setRuns((s) => {
-      const newRuns = [newRun, ...s];
-      localStorage.setItem("runs", JSON.stringify(newRuns));
-      return newRuns;
+      const updatedRuns = [newRun, ...s];
+      localStorage.setItem("runs", JSON.stringify(updatedRuns));
+      return updatedRuns;
     });
   }
 
   return (
-    <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-bold">[AI-Tool-2025-10-15]</h1>
-      <p className="text-sm text-gray-600 mt-1">[core: gemini-2.5-flash-image] [status: online]</p>
+    <main className="mx-auto max-w-3xl p-4 sm:p-6">
+      <h1 className="text-xl sm:text-2xl font-bold">[AI-Tool-2025-10-15]</h1>
+      <p className="text-sm text-muted-foreground mt-1">[core: gemini-2.5-flash-image] [status: online]</p>
 
       <section className="mt-6 space-y-4">
         <div>
-          <label className="block text-sm text-gray-600 mb-1">提示词</label>
+          <label className="block text-sm text-muted-foreground mb-1">提示词</label>
           <textarea
-            className="w-full min-h-28 rounded-md border p-3"
+            className="w-full min-h-28 rounded-md border p-3 bg-transparent"
             placeholder="请输入提示词"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -277,11 +275,30 @@ export default function Page() {
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600 mb-1">
+          <label className="block text-sm text-muted-foreground mb-1">生成数量</label>
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                key={n}
+                className={`rounded-md border px-4 py-2 ${
+                  batchSize === n
+                    ? "bg-foreground text-background"
+                    : "bg-background text-foreground"
+                }`}
+                onClick={() => setBatchSize(n)}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm text-muted-foreground mb-1">
             上传图片（0~8）
           </label>
           <div
-            className="rounded-md border-2 border-dashed p-6 text-center text-gray-600"
+            className="rounded-md border-2 border-dashed p-6 text-center text-muted-foreground"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
@@ -306,16 +323,14 @@ export default function Page() {
                   key={i}
                   className="relative rounded-md border overflow-hidden"
                 >
-                  <Image
-                    loader={({ src }) => src}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
                     src={x.url}
                     alt=""
-                    width={200}
-                    height={112}
                     className="w-full h-28 object-cover"
                   />
                   <button
-                    className="absolute top-1 right-1 text-xs bg-white/90 rounded px-2 py-0.5"
+                    className="absolute top-1 right-1 text-xs bg-background/90 text-foreground rounded px-2 py-0.5"
                     onClick={() => removeAt(i)}
                   >
                     移除
@@ -328,13 +343,13 @@ export default function Page() {
 
         <div className="flex items-center gap-3">
           <button
-            className="rounded-md bg-black text-white px-4 py-2 disabled:opacity-50"
+            className="rounded-md bg-foreground text-background px-4 py-2 disabled:opacity-50"
             disabled={busy}
             onClick={generate}
           >
-            {busy ? `处理中 ${Math.floor(progress)}%` : "生成图片"}
+            {busy ? `处理中 ${Math.floor(progress)}%` : `生成图片(${batchSize}张)`}
           </button>
-          <span className="text-sm text-gray-600">{status}</span>
+          <span className="text-sm text-muted-foreground">{status}</span>
         </div>
       </section>
 
@@ -344,29 +359,30 @@ export default function Page() {
             {runs.map((r, i) => (
               <div key={r.id} className="rounded-xl border p-3">
                 <div className="flex justify-between items-center">
-                  <div className="text-sm text-gray-700">生成时间：{r.ts}</div>
-                  <button
-                    className="bg-gray-600 hover:bg-gray-700 text-white text-xs font-bold py-1 px-2 rounded"
-                    onClick={() => removeRun(r.id)}
-                  >
-                    删除
-                  </button>
+                  <div className="text-sm text-muted-foreground">生成时间：{r.ts}</div>
                 </div>
-                <div className="text-xs text-gray-500 mt-1">
+                <div className="text-xs text-muted-foreground mt-1">
                   用时：{r.durSec.toFixed(1)}s
                 </div>
                 <div
                   className="mt-3 relative rounded-lg border overflow-hidden cursor-zoom-in"
                   onClick={() => openPreview(i)}
                 >
-                  <Image
-                    loader={({ src }) => src}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
                     src={r.url}
                     alt=""
-                    width={260}
-                    height={220}
                     className="w-full h-[220px] object-cover"
                   />
+                  <button
+                    className="absolute top-1 right-1 text-xs bg-background/80 text-foreground rounded px-2 py-0.5"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeRun(r.id);
+                    }}
+                  >
+                    删除
+                  </button>
                 </div>
               </div>
             ))}
@@ -386,30 +402,23 @@ export default function Page() {
                 className="max-w-3xl w-full"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="bg-[#fff9ef] rounded-xl p-3">
-                  {url && (
-                    <Image
-                      loader={({ src }) => src}
-                      src={url}
-                      alt=""
-                      width={1024}
-                      height={1024}
-                      className="w-full h-auto rounded-md"
-                    />
-                  )}
+                <div className="bg-background rounded-xl p-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {url && <img src={url} alt="" className="w-full h-auto rounded-md" />}
                   <div className="mt-3 flex flex-wrap gap-2 justify-between items-center">
-                    <div className="text-xs text-gray-700">
+                    <div className="text-xs text-muted-foreground">
                       {runs[preview.idx]?.ts} / {runs[preview.idx]?.durSec.toFixed(1)}s
                     </div>
                     <div className="flex gap-2">
                       {url && (
                         <button
                           className="rounded border px-3 py-1"
-                          onClick={() =>
-                            downloadImage(url, `run-${preview.idx + 1}.png`)
-                          }
+                          onClick={() => {
+                            navigator.clipboard.writeText(url);
+                            toast("链接已复制");
+                          }}
                         >
-                          下载PNG
+                          复制链接
                         </button>
                       )}
                       <button
