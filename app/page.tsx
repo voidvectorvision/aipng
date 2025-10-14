@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { z } from "zod";
 
 const MAX_FILES = 8;
@@ -17,7 +18,7 @@ type Run = { id: string; ts: string; durSec: number; url: string };
 
 export default function Page() {
   const [prompt, setPrompt] = useState("");
-  const [key, setKey] = useState<string>();
+  const [key, ] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("就绪");
   const [imgs, setImgs] = useState<Img[]>([]);
@@ -43,7 +44,7 @@ export default function Page() {
     const step = 100 / (14 * 10); // 每100ms一次，14秒到99%
     const timer = setInterval(() => {
       pct += step;
-      setProgress((p) => Math.min(pct, 99));
+      setProgress(() => Math.min(pct, 99));
     }, 100);
     return () => clearInterval(timer);
   }, [busy]);
@@ -84,10 +85,10 @@ export default function Page() {
     maxSide = 2048,
     quality = 0.82
   ): Promise<string> {
-    const img = new Image();
+    const img = new window.Image();
     img.src = dataURL;
     await img.decode();
-    let { width: w, height: h } = img;
+    const { width: w, height: h } = img;
     const scale = Math.min(1, maxSide / Math.max(w, h));
     if (scale === 1) return dataURL;
     const c = document.createElement("canvas");
@@ -153,7 +154,7 @@ export default function Page() {
 
     try {
       const endpoint = "https://oaiapi.asia/v1/chat/completions";
-      const content: any[] = [{ type: "text", text: ensureImageReturn(prompt) }];
+      const content: ({ type: "text"; text: string; } | { type: "image_url"; image_url: { url: string; }; })[] = [{ type: "text", text: ensureImageReturn(prompt) }];
       for (const im of imgs)
         content.push({ type: "image_url", image_url: { url: im.url } });
 
@@ -230,7 +231,7 @@ export default function Page() {
       // 处理images数组格式
       if (!urls.length && Array.isArray(json?.images)) {
         urls = json.images
-          .map((im: any) => im?.image_url?.url || "")
+          .map((im: { image_url?: { url: string } }) => im?.image_url?.url || "")
           .filter(Boolean)
           .map(safeUrl);
       }
@@ -244,8 +245,8 @@ export default function Page() {
       const dur = (performance.now() - t0) / 1000;
       openNewRun(urls, dur);
       toast(`完成：${urls.length} 张`);
-    } catch (e: any) {
-      toast(e?.message || "失败");
+    } catch (e: unknown) {
+      toast((e as Error)?.message || "失败");
     } finally {
       setProgress(100);
       setTimeout(() => setBusy(false), 300);
@@ -267,8 +268,8 @@ export default function Page() {
 
   return (
     <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-bold">图片生成</h1>
-      <p className="text-sm text-gray-600 mt-1">2025</p>
+      <h1 className="text-2xl font-bold">[AI-Tool-2025-10-15]</h1>
+      <p className="text-sm text-gray-600 mt-1">[core: gemini-2.5-flash-image] [status: online]</p>
 
       <section className="mt-6 space-y-4">
         <div>
@@ -311,9 +312,12 @@ export default function Page() {
                   key={i}
                   className="relative rounded-md border overflow-hidden"
                 >
-                  <img
+                  <Image
+                    loader={({ src }) => src}
                     src={x.url}
                     alt=""
+                    width={200}
+                    height={112}
                     className="w-full h-28 object-cover"
                   />
                   <button
@@ -361,9 +365,12 @@ export default function Page() {
                   className="mt-3 relative rounded-lg border overflow-hidden cursor-zoom-in"
                   onClick={() => openPreview(i)}
                 >
-                  <img
+                  <Image
+                    loader={({ src }) => src}
                     src={r.url}
                     alt=""
+                    width={260}
+                    height={220}
                     className="w-full h-[220px] object-cover"
                   />
                 </div>
@@ -386,7 +393,16 @@ export default function Page() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="bg-[#fff9ef] rounded-xl p-3">
-                  {url && <img src={url} alt="" className="w-full h-auto rounded-md" />}
+                  {url && (
+                    <Image
+                      loader={({ src }) => src}
+                      src={url}
+                      alt=""
+                      width={1024}
+                      height={1024}
+                      className="w-full h-auto rounded-md"
+                    />
+                  )}
                   <div className="mt-3 flex flex-wrap gap-2 justify-between items-center">
                     <div className="text-xs text-gray-700">
                       {runs[preview.idx]?.ts} / {runs[preview.idx]?.durSec.toFixed(1)}s
@@ -421,9 +437,8 @@ export default function Page() {
 
 function ensureImageReturn(p: string) {
   const t = p.trim();
-  return /务必返回图片$/.test(t)
-    ? t
-    : t + (/[。.!?？]$/.test(t) ? "" : "。") + "务必返回图片";
+  const suffix = "\n\n---\n\nOutput a Markdown image summary, and nothing else. No explanation, no talking.";
+  return t.endsWith(suffix) ? t : t + suffix;
 }
 function safeJson(txt: string) {
   try {

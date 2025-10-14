@@ -85,7 +85,7 @@ export default function Page() {
     maxSide = 2048,
     quality = 0.82
   ): Promise<string> {
-    const img = new Image();
+    const img = new window.Image();
     img.src = dataURL;
     await img.decode();
     let { width: w, height: h } = img;
@@ -266,8 +266,8 @@ export default function Page() {
 
   return (
     <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-bold">图片生成</h1>
-      <p className="text-sm text-gray-600 mt-1">2025</p>
+      <h1 className="text-2xl font-bold">[AI-Tool-2025-10-15]</h1>
+      <p className="text-sm text-gray-600 mt-1">[core: gemini-2.5-flash-image] [status: online]</p>
 
       <section className="mt-6 space-y-4">
         <div>
@@ -282,17 +282,21 @@ export default function Page() {
 
         <div>
           <label className="block text-sm text-gray-600 mb-1">生成数量</label>
-          <input
-            type="number"
-            className="w-full rounded-md border p-3"
-            value={batchSize}
-            onChange={(e) => {
-              const value = Math.max(1, Math.min(5, Number(e.target.value)));
-              setBatchSize(value);
-            }}
-            min={1}
-            max={5}
-          />
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                key={n}
+                className={`rounded-md border px-4 py-2 ${
+                  batchSize === n
+                    ? "bg-black text-white"
+                    : "bg-white text-black"
+                }`}
+                onClick={() => setBatchSize(n)}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div>

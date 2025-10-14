@@ -1,19 +1,6 @@
 // app/api/download/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
-
-function extFromType(t: string) {
-  if (/png/i.test(t)) return ".png";
-  if (/jpe?g/i.test(t)) return ".jpg";
-  if (/webp/i.test(t)) return ".webp";
-  if (/gif/i.test(t)) return ".gif";
-  if (/bmp/i.test(t)) return ".bmp";
-  return "";
-}
-function sanitizeName(s: string) {
-  return (s || "image").replace(/[\/\\:*?"<>|]+/g, "").replace(/\.+$/, "");
-}
-
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const url = searchParams.get("url");
