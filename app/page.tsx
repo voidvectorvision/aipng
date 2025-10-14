@@ -260,7 +260,7 @@ export default function Page() {
 
   return (
     <main className="mx-auto max-w-3xl p-4 sm:p-6">
-      <h1 className="text-xl sm:text-2xl font-bold">[AI-Tool-2025-10-15]</h1>
+      <h1 className="text-xl sm:text-2xl font-bold">[AI-Tool-2025]</h1>
       <p className="text-sm text-muted-foreground mt-1">[core: gemini-2.5-flash-image] [status: online]</p>
 
       <section className="mt-6 space-y-4">
