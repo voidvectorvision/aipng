@@ -29,6 +29,13 @@ export default function Page() {
   });
   const [progress, setProgress] = useState(0);
 
+  useEffect(() => {
+    const savedRuns = localStorage.getItem("runs");
+    if (savedRuns) {
+      setRuns(JSON.parse(savedRuns));
+    }
+  }, []);
+
   // ---- 伪进度逻辑 ----
   useEffect(() => {
     if (!busy) return setProgress(0);
@@ -63,20 +70,13 @@ export default function Page() {
     if (url.startsWith("data:") || url.startsWith("blob:")) {
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename.replace(/\.+$/, "");
+      a.download = filename.replace(/\. +$/, "");
       document.body.appendChild(a);
       a.click();
       a.remove();
       return;
     }
-    const a = document.createElement("a");
-    a.href = `/api/download?url=${encodeURIComponent(
-      url
-    )}&filename=${encodeURIComponent(filename.replace(/\.+$/, ""))}`;
-    a.download = filename.replace(/\.+$/, "");
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    window.open(url, "_blank");
   }
 
   async function downscaleDataURL(
@@ -131,6 +131,14 @@ export default function Page() {
 
   function removeAt(i: number) {
     setImgs((s) => s.filter((_, idx) => idx !== i));
+  }
+
+  function removeRun(id: string) {
+    setRuns((s) => {
+      const newRuns = s.filter((r) => r.id !== id);
+      localStorage.setItem("runs", JSON.stringify(newRuns));
+      return newRuns;
+    });
   }
 
   async function generate() {
@@ -249,7 +257,12 @@ export default function Page() {
     const url = urls[0];
     if (!url) return;
     const id = crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-    setRuns((s) => [{ id, ts, durSec, url }, ...s]);
+    const newRun = { id, ts, durSec, url };
+    setRuns((s) => {
+      const newRuns = [newRun, ...s];
+      localStorage.setItem("runs", JSON.stringify(newRuns));
+      return newRuns;
+    });
   }
 
   return (
@@ -332,7 +345,15 @@ export default function Page() {
           <div className="mx-auto max-w-5xl grid [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] gap-6">
             {runs.map((r, i) => (
               <div key={r.id} className="rounded-xl border p-3">
-                <div className="text-sm text-gray-700">生成时间：{r.ts}</div>
+                <div className="flex justify-between items-center">
+                  <div className="text-sm text-gray-700">生成时间：{r.ts}</div>
+                  <button
+                    className="bg-gray-600 hover:bg-gray-700 text-white text-xs font-bold py-1 px-2 rounded"
+                    onClick={() => removeRun(r.id)}
+                  >
+                    删除
+                  </button>
+                </div>
                 <div className="text-xs text-gray-500 mt-1">
                   用时：{r.durSec.toFixed(1)}s
                 </div>
@@ -361,14 +382,14 @@ export default function Page() {
               onClick={closePreview}
             >
               <div
-                className="max-w-5xl w-full"
+                className="max-w-3xl w-full"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="bg-[#fff9ef] rounded-xl p-3">
                   {url && <img src={url} alt="" className="w-full h-auto rounded-md" />}
                   <div className="mt-3 flex flex-wrap gap-2 justify-between items-center">
                     <div className="text-xs text-gray-700">
-                      {runs.length > 0 ? `第 ${preview.idx + 1} / ${runs.length}` : ""}
+                      {runs[preview.idx]?.ts} / {runs[preview.idx]?.durSec.toFixed(1)}s
                     </div>
                     <div className="flex gap-2">
                       {url && (
