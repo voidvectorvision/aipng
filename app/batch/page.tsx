@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 
 const MAX_FILES = 8;
@@ -17,7 +17,7 @@ type Run = { id: string; ts: string; durSec: number; url: string };
 
 export default function Page() {
   const [prompt, setPrompt] = useState("");
-  const [key, setKey] = useState<string>();
+  const [key, ] = useState<string>();
   const [batchSize, setBatchSize] = useState(1);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("就绪");
@@ -44,22 +44,16 @@ export default function Page() {
     const step = 100 / (14 * 10 * batchSize); // 每100ms一次，14秒到99%
     const timer = setInterval(() => {
       pct += step;
-      setProgress((p) => Math.min(pct, 99));
+      setProgress(() => Math.min(pct, 99));
     }, 100);
     return () => clearInterval(timer);
-  }, [busy]);
+  }, [busy, batchSize]);
 
   function openPreview(idx: number) {
     setPreview({ open: true, idx });
   }
   function closePreview() {
     setPreview((s) => ({ ...s, open: false }));
-  }
-  function prevImg() {
-    setPreview((s) => ({ ...s, idx: (s.idx - 1 + runs.length) % runs.length }));
-  }
-  function nextImg() {
-    setPreview((s) => ({ ...s, idx: (s.idx + 1) % runs.length }));
   }
 
   function toast(s: string) {
@@ -88,7 +82,7 @@ export default function Page() {
     const img = new window.Image();
     img.src = dataURL;
     await img.decode();
-    let { width: w, height: h } = img;
+    const { width: w, height: h } = img;
     const scale = Math.min(1, maxSide / Math.max(w, h));
     if (scale === 1) return dataURL;
     const c = document.createElement("canvas");
@@ -156,8 +150,8 @@ export default function Page() {
     try {
       await Promise.all(promises);
       toast(`完成：${batchSize} 张`);
-    } catch (e: any) {
-      toast(e?.message || "失败");
+    } catch (e: unknown) {
+      toast((e as Error)?.message || "失败");
     } finally {
       setProgress(100);
       setTimeout(() => setBusy(false), 300);
@@ -236,9 +230,9 @@ export default function Page() {
 
     if (!urls.length && Array.isArray(json?.images)) {
       urls = json.images
-        .map((im: any) => im?.image_url?.url || "")
-        .filter(Boolean)
-        .map(safeUrl);
+        .map((im: { image_url?: { url?: string } }) => im?.image_url?.url || "")
+         .filter(Boolean)
+         .map(safeUrl);
     }
 
     const finalUrls = Array.from(new Set(urls)).filter(Boolean);
@@ -329,6 +323,7 @@ export default function Page() {
                   key={i}
                   className="relative rounded-md border overflow-hidden"
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={x.url}
                     alt=""
@@ -379,6 +374,7 @@ export default function Page() {
                   className="mt-3 relative rounded-lg border overflow-hidden cursor-zoom-in"
                   onClick={() => openPreview(i)}
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={r.url}
                     alt=""
@@ -404,6 +400,7 @@ export default function Page() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="bg-[#fff9ef] rounded-xl p-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   {url && <img src={url} alt="" className="w-full h-auto rounded-md" />}
                   <div className="mt-3 flex flex-wrap gap-2 justify-between items-center">
                     <div className="text-xs text-gray-700">
@@ -440,7 +437,7 @@ export default function Page() {
 function ensureImageReturn(p: string) {
   const t = p.trim();
   const suffix = "\n\n---\n\nOutput a Markdown image summary, and nothing else. No explanation, no talking.";
-  return t + suffix;
+  return t.endsWith(suffix) ? t : t + suffix;
 }
 function safeJson(txt: string) {
   try {

@@ -18,7 +18,7 @@ type Run = { id: string; ts: string; durSec: number; url: string };
 
 export default function Page() {
   const [prompt, setPrompt] = useState("");
-  const [key, ] = useState<string>();
+  const [key, setKey] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("就绪");
   const [imgs, setImgs] = useState<Img[]>([]);
@@ -54,12 +54,6 @@ export default function Page() {
   }
   function closePreview() {
     setPreview((s) => ({ ...s, open: false }));
-  }
-  function prevImg() {
-    setPreview((s) => ({ ...s, idx: (s.idx - 1 + runs.length) % runs.length }));
-  }
-  function nextImg() {
-    setPreview((s) => ({ ...s, idx: (s.idx + 1) % runs.length }));
   }
 
   function toast(s: string) {
