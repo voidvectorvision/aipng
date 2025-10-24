@@ -295,7 +295,7 @@ export default function Page() {
 
         <div>
           <label className="block text-sm text-muted-foreground mb-1">
-            上传图片（0~8）
+            上传图片（最多可上传5张）
           </label>
           <div
             className="rounded-md border-2 border-dashed p-6 text-center text-muted-foreground"
