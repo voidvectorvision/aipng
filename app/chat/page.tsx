@@ -448,7 +448,7 @@ export default function Page() {
   };
 
   return (
-    <main className="mx-auto max-w-4xl h-screen flex flex-col p-4 sm:p-6">
+    <main className="mx-auto max-w-4xl h-screen flex flex-col p-4 sm:p-6 overflow-hidden">
       {/* Header */}
       <div className="flex justify-between items-center mb-4">
         <div>
@@ -480,7 +480,7 @@ export default function Page() {
 
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto border rounded-lg p-4 mb-4 bg-muted/20">
+      <div className="flex-1 overflow-y-auto border rounded-lg p-4 mb-4 bg-muted/20 messages-container">
         {messages.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">
             <p>开始与AI助手对话吧！</p>
@@ -497,7 +497,7 @@ export default function Page() {
                   className={`max-w-[100%] sm:max-w-[80%] rounded-lg p-2 text-sm ${
                     msg.role === "user"
                       ? "bg-primary text-primary-foreground"
-                      : "bg-gray-100"
+                      : "bg-muted"
                   }`}
                 >
                   {msg.role === "assistant" ? (

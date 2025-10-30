@@ -24,3 +24,29 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* 防止移动端页面拖拽 */
+html, body {
+  height: 100%;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 防止iOS Safari的橡皮筋效果 */
+body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 确保主容器可以正常滚动 */
+main {
+  overflow: hidden;
+}
+
+/* 消息区域的滚动样式 */
+.messages-container {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
