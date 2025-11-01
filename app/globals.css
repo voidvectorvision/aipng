@@ -25,23 +25,21 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-/* 防止移动端页面拖拽 */
+/* 默认允许正常滚动 */
 html, body {
-  height: 100%;
-  overflow: hidden;
-  position: fixed;
-  width: 100%;
+  height: auto;
+  min-height: 100%;
   -webkit-overflow-scrolling: touch;
 }
 
-/* 防止iOS Safari的橡皮筋效果 */
+/* 防止主页面过度滚动但允许正常滚动 */
 body {
-  overscroll-behavior: none;
-  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
-/* 确保主容器可以正常滚动 */
-main {
+/* 聊天页面特殊处理 - 防止移动端页面拖拽 */
+.chat-page {
+  height: 100vh;
   overflow: hidden;
 }
 

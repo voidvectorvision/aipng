@@ -8,7 +8,7 @@ const fileOk = (f: File) =>
   f.type.startsWith("image/") && f.size <= 10 * 1024 * 1024;
 
 const schema = z.object({
-  prompt: z.string().min(1, "请输入提示词").max(1000),
+  prompt: z.string().min(1, "请输入提示词"),
   key: z.string().optional(),
 });
 

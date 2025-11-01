@@ -448,7 +448,7 @@ export default function Page() {
   };
 
   return (
-    <main className="mx-auto max-w-4xl h-screen flex flex-col p-4 sm:p-6 overflow-hidden">
+    <main className="chat-page mx-auto max-w-4xl h-screen flex flex-col p-4 sm:p-6 overflow-hidden">
       {/* Header */}
       <div className="flex justify-between items-center mb-4">
         <div>
