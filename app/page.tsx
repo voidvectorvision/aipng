@@ -168,11 +168,13 @@ export default function Page() {
       },
       body: JSON.stringify({
         model: "gemini-2.5-flash-image",
+        // 强制要求模型以 JSON 输出（兼容支持 JSON 模式的网关）
+        response_format: { type: "json_object" },
         messages: [
           {
             role: "user",
             content: [
-              { type: "text", text: ensureImageReturn(prompt) },
+              { type: "text", text: ensureJsonReturn(prompt) },
               ...imgs.map((im) => ({ type: "image_url", image_url: { url: im.url } })),
             ],
           },
@@ -198,6 +200,9 @@ export default function Page() {
 
     const msg = json?.choices?.[0]?.message;
     let urls: string[] = [];
+
+    // 优先尝试解析结构化 JSON 输出
+    urls = parseImagesFromMessage(msg);
 
     if (Array.isArray(msg?.content)) {
       for (const b of msg.content) {
@@ -438,10 +443,67 @@ export default function Page() {
   );
 }
 
-function ensureImageReturn(p: string) {
+function ensureJsonReturn(p: string) {
   const t = p.trim();
-  const suffix = "\n\n---\n\nOutput a Markdown image summary, and nothing else. No explanation, no talking.";
+  const suffix = "\n\n---\n\nReturn only JSON with shape {\"images\":[{\"url\":string}]}. No explanation, no text outside JSON.";
   return t.endsWith(suffix) ? t : t + suffix;
+}
+
+// 解析 Chat Completions 返回的 message，优先读取结构化 JSON
+function parseImagesFromMessage(msg: any): string[] {
+  const urls: string[] = [];
+  if (!msg) return urls;
+
+  const content = msg?.content;
+
+  // 情况1：content 是 JSON 字符串
+  if (typeof content === "string") {
+    try {
+      const obj = JSON.parse(content);
+      if (Array.isArray(obj?.images)) {
+        for (const im of obj.images) {
+          if (typeof im === "string") urls.push(safeUrl(im));
+          else if (im && typeof im.url === "string") urls.push(safeUrl(im.url));
+        }
+      }
+    } catch {}
+  }
+
+  // 情况2：content 是分块数组
+  if (Array.isArray(content)) {
+    for (const b of content) {
+      // 新版可能为 output_text
+      if (b?.type === "output_text" && typeof b.text === "string") {
+        try {
+          const obj = JSON.parse(b.text);
+          if (Array.isArray(obj?.images)) {
+            for (const im of obj.images) {
+              if (typeof im === "string") urls.push(safeUrl(im));
+              else if (im && typeof im.url === "string") urls.push(safeUrl(im.url));
+            }
+          }
+        } catch {}
+      }
+      // 或普通 text 块
+      if (b?.type === "text" && typeof b.text === "string") {
+        try {
+          const obj = JSON.parse(b.text);
+          if (Array.isArray(obj?.images)) {
+            for (const im of obj.images) {
+              if (typeof im === "string") urls.push(safeUrl(im));
+              else if (im && typeof im.url === "string") urls.push(safeUrl(im.url));
+            }
+          }
+        } catch {}
+      }
+      // 兼容直接返回 image_url
+      if (b?.type === "image_url" && b.image_url?.url) {
+        urls.push(safeUrl(b.image_url.url));
+      }
+    }
+  }
+
+  return Array.from(new Set(urls)).filter(Boolean);
 }
 function safeJson(txt: string) {
   try {
